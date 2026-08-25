@@ -275,7 +275,7 @@ function dataURLtoBlob(d){
 let toastTimer;
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2600); }
 
-const BUILD = 4;
+const BUILD = 5;
 const REPORT_TYPES = {
   swppp:       { label:'SWPPP Self-Inspection', short:'SWPPP', blurb:'Stormwater compliance & E&SC inspection' },
   observation: { label:'Superintendent Observation', short:'Observation', blurb:'Field deficiencies, safety & quality log' },
@@ -624,7 +624,8 @@ function openPhotoPicker(reportId){
 }
 async function handleFiles(files){
   if(!pendingReportId) return;
-  if(!files||!files.length){ toast('No photo came through — try again'); return; }
+  files=Array.from(files||[]);
+  if(!files.length){ toast('No photo came through — try again'); return; }
   const r=await DB.get('reports',pendingReportId); if(!r) return;
   const grid=$('#pgrid');
   toast(`Adding ${files.length} photo${files.length>1?'s':''}…`);
@@ -762,8 +763,8 @@ const GLYPH={
 $('#backBtn').onclick=()=>{ const bar=$('#actionbar'); if(bar)bar.remove(); go('home'); };
 $('#menuBtn').onclick=openMenu;
 $('#scrim').onclick=closeSheet;
-$('#cameraInput').onchange=e=>{ handleFiles(e.target.files); e.target.value=''; };
-$('#galleryInput').onchange=e=>{ handleFiles(e.target.files); e.target.value=''; };
+$('#cameraInput').onchange=e=>{ const fs=Array.from(e.target.files||[]); e.target.value=''; handleFiles(fs); };
+$('#galleryInput').onchange=e=>{ const fs=Array.from(e.target.files||[]); e.target.value=''; handleFiles(fs); };
 $('#importInput').onchange=async e=>{
   const f=e.target.files[0]; e.target.value=''; if(!f) return;
   toast('Importing…');

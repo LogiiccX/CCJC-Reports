@@ -1,6 +1,6 @@
 /* CCJC Field Reports — service worker
    Bump CACHE when you ship a new build so devices pull the update. */
-const CACHE = 'ccjc-field-v4';
+const CACHE = 'ccjc-field-v5';
 const SHELL = [
   './',
   './index.html',
