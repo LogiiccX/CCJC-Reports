@@ -275,6 +275,7 @@ function dataURLtoBlob(d){
 let toastTimer;
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2600); }
 
+const BUILD = 4;
 const REPORT_TYPES = {
   swppp:       { label:'SWPPP Self-Inspection', short:'SWPPP', blurb:'Stormwater compliance & E&SC inspection' },
   observation: { label:'Superintendent Observation', short:'Observation', blurb:'Field deficiencies, safety & quality log' },
@@ -310,10 +311,25 @@ const DB = (() => {
   }
   function tx(store,mode='readonly'){ return open().then(db=>db.transaction(store,mode).objectStore(store)); }
   const done = req => new Promise((res,rej)=>{ req.onsuccess=()=>res(req.result); req.onerror=()=>rej(req.error); });
+  // writes resolve only when the whole transaction COMMITS, so quota/abort
+  // failures surface as real errors instead of a false success + missing data.
+  function write(store,fn){
+    return open().then(db=>new Promise((res,rej)=>{
+      let t;
+      try{ t=db.transaction(store,'readwrite'); }
+      catch(e){ return rej(new Error('tx-open '+(e&&e.name||'')+' '+(e&&e.message||''))); }
+      let result;
+      const req=fn(t.objectStore(store));
+      if(req){ req.onsuccess=()=>{ result=req.result; }; req.onerror=()=>rej(req.error||new Error('req error')); }
+      t.oncomplete=()=>res(result);
+      t.onabort=()=>rej(t.error||new Error('tx aborted (storage full?)'));
+      t.onerror=()=>rej(t.error||new Error('tx error'));
+    }));
+  }
   return {
-    put:(store,val)=>tx(store,'readwrite').then(s=>done(s.put(val))),
+    put:(store,val)=>write(store,s=>s.put(val)),
+    del:(store,key)=>write(store,s=>s.delete(key)),
     get:(store,key)=>tx(store).then(s=>done(s.get(key))),
-    del:(store,key)=>tx(store,'readwrite').then(s=>done(s.delete(key))),
     all:(store)=>tx(store).then(s=>done(s.getAll())),
     byIndex:(store,idx,key)=>tx(store).then(s=>done(s.index(idx).getAll(key))),
   };
@@ -389,7 +405,8 @@ const Photos = (() => {
     const rec={ id:uid(), reportId, full, thumb, w, h,
       size:(full && full.size) || 0, type:(file && file.type) || '',
       degraded, why, caption:'', createdAt:Date.now() };
-    await DB.put('photos',rec);
+    try{ await DB.put('photos',rec); }
+    catch(e){ throw new Error('store: '+((e&&e.name?e.name+' ':'')+(e&&e.message?e.message:String(e)))); }
     return rec;
   }
   function thumbURL(rec){
@@ -517,6 +534,11 @@ async function renderHome(){
   stor.innerHTML=`<div class="bar"><i id="storFill"></i></div><div class="lab" id="storLab">Checking…</div>`;
   app.append(stor);
   updateStorage();
+
+  const ver=el('div');
+  ver.style.cssText='text-align:center;color:var(--muted);font-family:var(--mono);font-size:10px;letter-spacing:.08em;margin-top:16px';
+  ver.textContent='CCJC FIELD REPORTS · BUILD '+BUILD;
+  app.append(ver);
 }
 
 /* ---------- REPORT (shell — forms plug in here) ---------- */
@@ -606,7 +628,8 @@ async function handleFiles(files){
   const r=await DB.get('reports',pendingReportId); if(!r) return;
   const grid=$('#pgrid');
   toast(`Adding ${files.length} photo${files.length>1?'s':''}…`);
-  let ok=0, degraded=0, why='', hardErr='';
+  let ok=0, degraded=0, why='';
+  const fails=[];
   for(const file of files){
     const cell=el('div','pthumb spin'); if(grid) grid.append(cell);
     try{
@@ -618,15 +641,33 @@ async function handleFiles(files){
       if(rec.degraded){ degraded++; why=rec.why||why; }
     }catch(e){
       cell.remove();
-      hardErr=e && e.message ? e.message : 'could not save';
+      fails.push(`file: ${(file&&file.name)||'(from camera)'}\ntype: ${(file&&file.type)||'?'} · ${file?kb(file.size):'?'}\nerror: ${e&&e.message?e.message:String(e)}`);
       console.error('photo save failed:', e);
     }
   }
   await renderPhotoGrid(r);
   updateStorage();
-  if(ok && degraded) toast(`${ok} added — ${degraded} stored uncompressed (${why})`);
-  else if(ok) toast(`${ok} photo${ok>1?'s':''} added`);
-  else toast('Photo failed: '+hardErr);
+  if(ok && degraded){ toast(`${ok} added — ${degraded} stored uncompressed (${why})`); }
+  else if(ok){ toast(`${ok} photo${ok>1?'s':''} added`); }
+  else {
+    toast('Photo failed — details shown');
+    let env=`build ${BUILD} · secure:${window.isSecureContext} · bitmap:${'createImageBitmap' in window} · idb:${!!window.indexedDB}`;
+    try{
+      if(navigator.storage&&navigator.storage.estimate){
+        const est=await navigator.storage.estimate();
+        env+=`\nstorage: ${est.usage!=null?kb(est.usage)+' / '+kb(est.quota):'n/a'}`;
+      }
+    }catch(_){}
+    showError('Photo failed', fails.join('\n\n')+'\n\n'+env);
+  }
+}
+function showError(title, detail){
+  openSheet(`<h3>${escapeHTML(title)}</h3>
+    <p class="lead">Screenshot or copy this and send it — it names exactly what failed.</p>
+    <pre style="white-space:pre-wrap;word-break:break-word;background:#0c141f;color:#cfe0ee;padding:12px;border-radius:10px;font:12px/1.5 var(--mono);max-height:42vh;overflow:auto;margin:0">${escapeHTML(detail)}</pre>
+    <button class="btn ghost" id="errCopy" style="width:100%;margin-top:12px">Copy details</button>`);
+  const cbtn=$('#errCopy');
+  if(cbtn) cbtn.onclick=async()=>{ try{ await navigator.clipboard.writeText(detail); toast('Copied'); }catch(_){ toast('Select the text above to copy'); } };
 }
 
 /* ---------- photo viewer ---------- */
@@ -738,6 +779,15 @@ if(navigator.storage&&navigator.storage.persist){ navigator.storage.persist().ca
 
 /* ---------- go ---------- */
 render();
+
+/* storage self-check: if IndexedDB can't be opened, say so plainly */
+DB.all('reports').catch(e=>{
+  showError('Storage unavailable',
+    'This device blocked the app\'s local storage (IndexedDB), so nothing can be saved.\n\n'+
+    'error: '+(e&&e.message?e.message:String(e))+'\n'+
+    'build '+BUILD+' · secure:'+window.isSecureContext+'\n\n'+
+    'Most common cause: the page is open in Private Browsing, or was launched from an old tab instead of the installed icon.');
+});
 </script>
 </body>
 </html>
