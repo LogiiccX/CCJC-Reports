@@ -220,6 +220,24 @@ main{max-width:640px;margin:0 auto;padding:16px 16px 120px}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
 .hint{font-size:12px;color:var(--muted);margin-top:8px;font-family:var(--mono)}
+
+/* ---------- schema form ---------- */
+.fsec{margin-top:22px;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.fsec-head{display:flex;align-items:center;gap:9px;background:var(--steel);color:#fff;padding:11px 14px;font-family:var(--display);font-weight:600;font-size:15px;border-left:4px solid var(--brass)}
+.fsec-page{font-family:var(--mono);font-size:10px;letter-spacing:.06em;background:rgba(255,255,255,.16);padding:2px 6px;border-radius:5px;flex:none}
+.fsec-body{padding:14px}
+.fsec-body .field:last-child{margin-bottom:0}
+.fcheck{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-2)}
+.fcheck:last-child{border-bottom:none}
+.fcheck input{width:22px;height:22px;flex:none;accent-color:var(--steel)}
+.fcheck span{font-size:14px}
+.tbl-card{border:1px solid var(--line);border-radius:11px;padding:12px;margin-bottom:10px;background:var(--paper)}
+.tbl-card-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.tbl-card-h b{font-family:var(--display);font-size:14px;color:var(--ink)}
+.tbl-del{color:var(--danger);font-size:12px;font-weight:600;padding:4px 8px}
+.tbl-add{width:100%;background:var(--paper);border:1px dashed var(--steel);color:var(--steel);border-radius:10px;padding:12px;font-weight:600;margin-top:2px}
+.tbl-add:active{background:#e7edf2}
+.tbl-empty{color:var(--muted);font-size:13px;padding:4px 0 10px}
 .hidden{display:none!important}
 </style>
 </head>
@@ -252,6 +270,10 @@ main{max-width:640px;margin:0 auto;padding:16px 16px 120px}
 <div class="sheet" id="sheet" role="dialog" aria-modal="true"><div class="grabber"></div><div id="sheetBody"></div></div>
 <div class="toast" id="toast"></div>
 
+<script src="pdf-lib.min.js"></script>
+<script src="forms-swppp.js"></script>
+<script src="forms-observation.js"></script>
+<script src="forms-architect.js"></script>
 <script>
 /* =====================================================================
    CCJC Field Reports — offline plumbing
@@ -275,7 +297,7 @@ function dataURLtoBlob(d){
 let toastTimer;
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('on'),2600); }
 
-const BUILD = 5;
+const BUILD = 7;
 const REPORT_TYPES = {
   swppp:       { label:'SWPPP Self-Inspection', short:'SWPPP', blurb:'Stormwater compliance & E&SC inspection' },
   observation: { label:'Superintendent Observation', short:'Observation', blurb:'Field deficiencies, safety & quality log' },
@@ -475,6 +497,8 @@ async function newReport(type){
   const now=Date.now();
   const r={ id:uid(), type, title:'', status:'draft', createdAt:now, updatedAt:now,
     data:{}, photoOrder:[] };
+  const def=(window.CCJC_FORMS&&window.CCJC_FORMS[type])?window.CCJC_FORMS[type]:null;
+  if(def&&def.schema&&def.schema.prefill) Object.assign(r.data, def.schema.prefill);
   await DB.put('reports',r);
   state.reportId=r.id; go('report');
 }
@@ -557,18 +581,21 @@ async function renderReport(){
   ti.oninput=()=>saveField('title',ti.value.trim());
   f1.append(ti); app.append(f1);
 
-  // form placeholder (the SWPPP / Observation / Architect field sets land here)
-  const note=el('div','field');
-  note.innerHTML=`<div class="placeholder-note"><b>${t.short} form fields</b> plug in here next — full field fidelity, matching your ${t.short} PDF. Photo capture below is live now so you can test it end to end.</div>`;
-  app.append(note);
-
-  // quick notes so drafts are useful today
-  const f2=el('div','field');
-  f2.innerHTML=`<label for="rnotes">Field notes</label>`;
-  const ta=el('textarea'); ta.id='rnotes'; ta.value=r.data.notes||'';
-  ta.placeholder='Anything worth recording on this walk…';
-  ta.oninput=()=>saveField('data.notes',ta.value);
-  f2.append(ta); app.append(f2);
+  // form: schema-driven fields for types we've wired; placeholder otherwise
+  const formDef = (window.CCJC_FORMS && window.CCJC_FORMS[r.type]) ? window.CCJC_FORMS[r.type] : null;
+  if(formDef){
+    renderSchemaForm(app, r, formDef.schema);
+  } else {
+    const note=el('div','field');
+    note.innerHTML=`<div class="placeholder-note"><b>${t.short} form fields</b> plug in here next — full field fidelity, matching your ${t.short} PDF. Photo capture below is live now so you can test it end to end.</div>`;
+    app.append(note);
+    const f2=el('div','field');
+    f2.innerHTML=`<label for="rnotes">Field notes</label>`;
+    const ta=el('textarea'); ta.id='rnotes'; ta.value=r.data.notes||'';
+    ta.placeholder='Anything worth recording on this walk…';
+    ta.oninput=()=>saveField('data.notes',ta.value);
+    f2.append(ta); app.append(f2);
+  }
 
   // ---- photos ----
   const psec=el('div','section');
@@ -586,12 +613,187 @@ async function renderReport(){
   // action bar
   let bar=$('#actionbar'); if(bar) bar.remove();
   bar=el('div','actionbar'); bar.id='actionbar';
-  const finish=el('button','btn primary'); finish.textContent = r.status==='complete'?'Reopen':'Mark complete';
-  finish.onclick=()=>toggleComplete(r);
   const del=el('button','btn ghost'); del.textContent='Delete';
   del.onclick=()=>confirmDelete(r);
-  bar.append(del,finish);
+  if(formDef){
+    const sum=el('button','btn ghost'); sum.textContent='Summary';
+    sum.onclick=()=>generateSummary(r, formDef.schema);
+    const pdf=el('button','btn primary'); pdf.textContent='Official PDF';
+    pdf.onclick=()=>generateForm(r, formDef.schema);
+    bar.append(del,sum,pdf);
+  } else {
+    const finish=el('button','btn primary'); finish.textContent = r.status==='complete'?'Reopen':'Mark complete';
+    finish.onclick=()=>toggleComplete(r);
+    bar.append(del,finish);
+  }
   document.body.append(bar);
+}
+
+/* ---------- schema form engine ---------- */
+function renderSchemaForm(app, r, schema){
+  for(const sec of schema.sections){
+    if(sec.kind==='photos') continue; // photo capture UI handles these
+    const wrap=el('div','fsec');
+    const head=el('div','fsec-head');
+    head.innerHTML=`<span class="fsec-page">P${sec.page}</span> ${escapeHTML(sec.title)}`;
+    wrap.append(head);
+    const body=el('div','fsec-body');
+    if(sec.kind==='table') renderTableSection(body, r, sec);
+    else for(const it of sec.items) body.append(renderFieldInput(r, it));
+    wrap.append(body); app.append(wrap);
+  }
+}
+function renderFieldInput(r, it){
+  const val=r.data[it.name];
+  if(it.type==='check'){
+    const row=el('label','fcheck');
+    const cb=el('input'); cb.type='checkbox'; cb.checked=!!val;
+    cb.onchange=()=>saveField('data.'+it.name, cb.checked);
+    const sp=el('span'); sp.textContent=it.label||it.name;
+    row.append(cb,sp); return row;
+  }
+  const f=el('div','field');
+  const lab=el('label'); lab.textContent=it.label||it.name; f.append(lab);
+  const inp = it.multiline ? el('textarea') : el('input');
+  if(!it.multiline){ inp.type='text'; }
+  inp.value = (val!=null) ? val : '';
+  inp.oninput=()=>saveField('data.'+it.name, inp.value);
+  f.append(inp); return f;
+}
+function renderTableSection(body, r, sec){
+  const key='tbl_'+sec.prefix;
+  if(!Array.isArray(r.data[key])) r.data[key]=[];
+  const entries=r.data[key];
+  const list=el('div'); body.append(list);
+  const draw=()=>{
+    list.innerHTML='';
+    if(!entries.length){ const e=el('div','tbl-empty'); e.textContent='No entries yet.'; list.append(e); }
+    entries.forEach((entry,i)=>{
+      const card=el('div','tbl-card');
+      const h=el('div','tbl-card-h'); const b=el('b'); b.textContent=`Entry ${i+1}`;
+      const rm=el('button','tbl-del'); rm.textContent='Remove';
+      rm.onclick=()=>{ entries.splice(i,1); persistTable(r,key,entries); draw(); };
+      h.append(b,rm); card.append(h);
+      for(const col of sec.columns){
+        const f=el('div','field');
+        const lab=el('label'); lab.textContent=col.label; f.append(lab);
+        const inp=el('input'); inp.type='text'; inp.value=entry[col.key]||'';
+        inp.oninput=()=>{ entry[col.key]=inp.value; persistTable(r,key,entries); };
+        f.append(inp); card.append(f);
+      }
+      list.append(card);
+    });
+  };
+  draw();
+  const add=el('button','tbl-add'); add.textContent='+ Add entry';
+  add.onclick=()=>{ if(entries.length>=sec.rows){ toast('This log holds up to '+sec.rows+' rows'); return; } entries.push({}); persistTable(r,key,entries); draw(); };
+  body.append(add);
+}
+async function persistTable(r,key,entries){
+  const rr=await DB.get('reports',r.id); if(!rr) return;
+  rr.data[key]=entries; rr.updatedAt=Date.now(); await DB.put('reports',rr);
+}
+
+/* ---------- on-device PDF fill (offline, pdf-lib) ---------- */
+function b64ToBytes(b64){ const bin=atob(b64); const a=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++)a[i]=bin.charCodeAt(i); return a; }
+async function deliver(bytes, filename){
+  const blob=new Blob([bytes],{type:'application/pdf'});
+  try{
+    const file=new File([blob],filename,{type:'application/pdf'});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title:filename}); return;
+    }
+  }catch(e){ if(e && e.name==='AbortError') return; }
+  const url=URL.createObjectURL(blob);
+  const a=el('a'); a.href=url; a.download=filename; document.body.append(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),5000);
+}
+async function generateForm(r, schema){
+  if(!window.PDFLib){ showError('PDF engine not loaded','pdf-lib.min.js did not load. Reload the app once while online so it caches.'); return; }
+  toast('Building official PDF…');
+  try{
+    const { PDFDocument } = PDFLib;
+    const doc=await PDFDocument.load(b64ToBytes(window.CCJC_FORMS[r.type].pdf_b64));
+    const form=doc.getForm();
+    const setText=(n,v)=>{ try{ form.getTextField(n).setText(v==null?'':String(v)); }catch(e){} };
+    const setCheck=(n,v)=>{ try{ const f=form.getCheckBox(n); v?f.check():f.uncheck(); }catch(e){} };
+    for(const sec of schema.sections){
+      if(sec.kind==='table'||sec.kind==='photos') continue;
+      for(const it of sec.items){
+        const v=r.data[it.name];
+        if(it.type==='check') setCheck(it.name, !!v);
+        else if(v!=null && v!=='') setText(it.name, v);
+      }
+    }
+    for(const sec of schema.sections){
+      if(sec.kind!=='table') continue;
+      const entries=Array.isArray(r.data['tbl_'+sec.prefix])?r.data['tbl_'+sec.prefix]:[];
+      entries.slice(0,sec.rows).forEach((entry,i)=>{
+        sec.columns.forEach((col,ci)=>{
+          const v=entry[col.key]; if(v!=null&&v!=='') setText(`${sec.prefix}_r${i}_c${ci}`, v);
+        });
+      });
+    }
+    const psec=schema.sections.find(s=>s.kind==='photos');
+    if(psec && psec.slots){
+      const photos=await DB.byIndex('photos','reportId',r.id);
+      const map=new Map(photos.map(p=>[p.id,p]));
+      const ordered=(r.photoOrder||[]).map(id=>map.get(id)).filter(Boolean);
+      const pages=doc.getPages(); const page=pages[psec.page-1];
+      for(let i=0;i<psec.slots.length && i<ordered.length;i++){
+        const slot=psec.slots[i], ph=ordered[i];
+        try{
+          const buf=await ph.full.arrayBuffer();
+          let img=null;
+          try{ img=await doc.embedJpg(buf); }catch(e){ try{ img=await doc.embedPng(buf); }catch(_){ } }
+          if(img){
+            const [x,y,w,h]=slot.img_rect;
+            const s=Math.min(w/img.width, h/img.height);
+            const dw=img.width*s, dh=img.height*s;
+            page.drawImage(img,{x:x+(w-dw)/2, y:y+(h-dh)/2, width:dw, height:dh});
+          }
+        }catch(e){ console.warn('photo embed failed', e); }
+        if(ph.caption) setText(slot.desc, ph.caption);
+        setText(slot.date, new Date(ph.createdAt).toLocaleDateString());
+      }
+    }
+    const out=await doc.save();
+    const base=(r.title?r.title.replace(/[^\w-]+/g,'_'):schema.file);
+    await deliver(out, base+'.pdf');
+    toast('Official PDF ready');
+  }catch(e){ console.error(e); showError('PDF generation failed', (e&&e.message)||String(e)); }
+}
+async function generateSummary(r, schema){
+  if(!window.PDFLib){ showError('PDF engine not loaded','Reload once online so pdf-lib caches.'); return; }
+  toast('Building summary…');
+  try{
+    const { PDFDocument, StandardFonts, rgb } = PDFLib;
+    const doc=await PDFDocument.create();
+    const page=doc.addPage([612,792]);
+    const font=await doc.embedFont(StandardFonts.Helvetica);
+    const bold=await doc.embedFont(StandardFonts.HelveticaBold);
+    const navy=rgb(0.086,0.149,0.231), brass=rgb(0.722,0.525,0.184), ink=rgb(0.1,0.15,0.2), mute=rgb(0.42,0.47,0.52);
+    page.drawRectangle({x:0,y:732,width:612,height:60,color:navy});
+    page.drawRectangle({x:0,y:729,width:612,height:3,color:brass});
+    page.drawText('CCJC · '+schema.short+' SUMMARY',{x:40,y:754,size:15,font:bold,color:rgb(1,1,1)});
+    page.drawText('Yates-Metcon / CM-GC / CCJC Justice Center Complex',{x:40,y:739,size:8,font,color:rgb(.72,.78,.85)});
+    let y=700;
+    const line=(l,v)=>{ page.drawText(l,{x:40,y,size:9,font:bold,color:navy}); page.drawText(v||'—',{x:210,y,size:9,font,color:ink}); y-=18; };
+    line('Report', r.title||('Untitled '+schema.short));
+    line('Inspection date', r.data.p1_idate);
+    line('Inspector', r.data.p1_iname);
+    line('County', r.data.p1_county);
+    line('Receiving water', r.data.p1_water);
+    const status = r.data.cs_ok?'In compliance': r.data.cs_minor?'Minor - corrected': r.data.cs_pending?'Action pending': r.data.cs_report?'Reportable - notified':'—';
+    line('Compliance status', status);
+    y-=6; page.drawText('LOGGED ENTRIES',{x:40,y,size:9,font:bold,color:brass}); y-=18;
+    for(const sec of schema.sections){ if(sec.kind!=='table') continue; line('  '+sec.title, String((r.data['tbl_'+sec.prefix]||[]).length)); }
+    line('Photos attached', String((r.photoOrder||[]).length));
+    y-=8; page.drawText('Generated '+new Date().toLocaleString()+'  ·  full record in the official PDF',{x:40,y,size:8,font,color:mute});
+    const out=await doc.save();
+    await deliver(out, (r.title?r.title.replace(/[^\w-]+/g,'_'):schema.short)+'_summary.pdf');
+    toast('Summary ready');
+  }catch(e){ console.error(e); showError('Summary failed',(e&&e.message)||String(e)); }
 }
 
 async function renderPhotoGrid(r){

@@ -1,10 +1,14 @@
 /* CCJC Field Reports — service worker
    Bump CACHE when you ship a new build so devices pull the update. */
-const CACHE = 'ccjc-field-v5';
+const CACHE = 'ccjc-field-v7';
 const SHELL = [
   './',
   './index.html',
   './manifest.json',
+  './pdf-lib.min.js',
+  './forms-swppp.js',
+  './forms-observation.js',
+  './forms-architect.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/icon-180.png',
